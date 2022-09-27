@@ -31,3 +31,34 @@
 * Makefile：基于内核的Makefile。
 
 ## 编译内核
+
+### 配置内核
+
+可以在编译内核之前，对源码进行配置。
+* 可以配置以CONFIG_为前缀的选项，如CONFIG_SMP。
+* 配置选项用于决定哪些文件编译进入内核，也可以通过预处理命令处理代码。
+
+内核配置有如下方式：
+``` bash
+make config
+make menuconfig
+make gconfig
+make defconfig
+```
+
+配置项会被保存在内核代码根目录下的.config文件中。
+* 更改配置文件之后，更新配置操作：
+``` bash
+make oldconfig
+```
+
+> CONFIG_IKCONFIG_PROC把压缩过的内核配置文件存在/proc/config.gz中。
+> 编译新内核时，可以使用zcat将其覆盖到.config文件中。
+
+### 编译内核
+
+内核配置好之后，直接使用make进行编译。
+
+make默认只衍生一个作业，因为Makefiles常会出现不正确的依赖信息。
+* 对于不正确的依赖，多个作业可能发生**相互踩踏**，导致编译出错。
+* 
