@@ -134,5 +134,38 @@ copy_process()结束后回到do_fork()。
   * 父进程先执行的话，可能会开始向地址空间写入。
 
 TODO：为什么子进程先运行？
+TODO：扫尾工作是什么？
 
+### vfork()
+
+vfork()和fork()区别在于：**vfork()不拷贝父进程的页表**。
+* 子进程作为父进程的一个**单独的线程**在父进程的地址空间运行。
+* 父进程会被阻塞，直到子进程退出或执行exec()。
+* 子进程无法向地址空间写入。
+
+> exec()调用失败会导致父进程持续阻塞，所以尽量不要调用vfork()。
+
+vfork()底层向clone()传递一个特殊标志位。
+* 调用copy_process()时，task_struct的vfork_done成员被设置为NULL。
+* 在do_fork()时，如果指定了特殊标志，则vfork_done会指向一个特定地址。
+* 子进程开始执行后，父进程**等待**子进程通过vfork_done指针向它发送信号。
+* 函数mm_release()让进程退出内存地址空间，并检查vfork_done是否为NULL，若不为NULL，则向父进程发出信号。
+* 回到do_fork()，父进程醒来并返回。
+
+```mermaid
+graph LR;
+  subgraph father process;
+    A(fork)-->B(clone);
+    B-->C(copy_process);
+    C--NULL-->D[vfork_done];
+    C-->E(do_fork);
+    E-->F{flag?};
+    F--addr-->D;
+    E--wait-->E;
+    D--signal-->E;
+  end;
+  subgraph child process;
+    G(mm_release)--check-->D;
+  end;
+```
 
