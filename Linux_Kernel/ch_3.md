@@ -169,3 +169,58 @@ graph LR;
   end;
 ```
 
+## 线程在Linux中的实现
+
+线程机制提供了**在同一程序中共享地址空间运行**的一组线程。
+* 这些线程可以共享打开的文件和其他资源。
+* 线程机制支持并发程序设计技术，在多处理器系统上可以完成真正的并行处理。
+
+内核并没有线程这个概念。
+* Linux**把所有线程都当作进程来实现**。
+* 线程被视为和其他进程共享资源的进程。
+* 每个线程都有自己唯一的task_struct。
+
+> 其他系统中都是实现了专门的线程机制——轻量级线程。
+
+### 创建线程
+
+线程创建类似于进程创建，不过在调用clone()时**需要传递一些参数标志来指明需要共享的资源**。
+
+```C
+//创建线程
+clone(CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND, 0)
+
+//实现fork()
+clone(SIGCHLD， 0)
+
+//实现vfork()
+clone(CLONE_VFORK | CLONE_VM | SIGCHLD, 0)
+```
+
+> [查看clone()标志位](https://man7.org/linux/man-pages/man2/clone.2.html)
+
+### 内核线程
+
+内核通过内核线程完成后台任务。
+* 内核线程是独立运行在内核空间的标准进程。
+* 内核线程不会切换到用户空间，所以只会被内核线程创建（通过kthreadd内核进程衍生）。
+  * 创建内核线程的方法是`kthread_create()`
+* 内核线程**没有独立的地址空间**，即指向地址空间的mm指针被设置为NULL。
+* 内核线程可以被调度和抢占。
+
+```C
+struct task_struct *kthread_create(int (*threadfn)(void *data), //需要执行的函数
+void *data, //传给threadfn的参数
+const char namefmt[], //进程的名称
+...
+)
+```
+
+刚创建的进程处于不可运行状态，需要调用`wake_up_process()`来唤醒。
+* 创建并且运行内核线程通过`kthread_run()`实现。
+  * 传入参数同`kthread_create()`，故本身是由宏实现的。
+
+内核线程的退出有两种方式。
+* 自身do_exit()退出。
+* 内核其他部分调用kthread_stop()指定task_struct地址退出。
+
