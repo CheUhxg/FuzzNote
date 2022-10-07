@@ -224,3 +224,71 @@ const char namefmt[], //进程的名称
 * 自身do_exit()退出。
 * 内核其他部分调用kthread_stop()指定task_struct地址退出。
 
+## 进程终结
+
+进程终结时，内核会释放其占有的资源并且通知父进程。
+* 可能是自己显示调用exit()退出，或者从main()函数返回（C编译器会在之后放置调用exit()的代码）或者被动终结。
+
+进程终结都要靠do_exit()来完成。
+1. 将task_struct的标志设置为PF_EXITING。
+2. 调用del_timer_sync()删除任一内核定时器。
+3. 如果BSD的进程记账功能开启，do_exit()调用acct_update_integrals()来输出记账信息。
+4. 调用exit_mm()释放进程占用的mm_struct，如果该地址没有被共享，则彻底释放该地址空间。
+5. 调用sem_exit()，如果进程正排队等待IPC信号，则离开队列。
+6. 调用exit_files()和exit_fs()，分别**递减文件描述符、文件系统数据的引用计数**，如果某引用计数为0，则释放该资源。
+7. 将task_struct中的exit_code设置为exit()提供的退出代码或者是内核规定的退出动作。
+   * 父进程可随时检索该字段。
+8. 调用exit_notify()向父进程发送信号。
+   * 父进程修改该进程的父进程为自己**线程组中的其他线程或者init进程**。
+   * 父进程把该进程的**进程状态设置为EXIT_ZOMBIE**。
+9. 调用schedule()切换到新进程。
+   * 因为EXIT_ZOMBIE不会被调度，do_exit()也就不会返回.
+
+TODO：为什么要删除任一内核定时器？
+
+TODO：记账信息是什么？
+
+```mermaid
+graph TB;
+  subgraph father process
+    father[deal]
+    father-->schedule[schedule]
+  end
+  subgraph process
+    subgraph do_exit
+      task[task_struct]--PF_EXITING-->task
+      task-->del_timer_sync[del_timer_sync]
+      del_timer_sync--1-->isacct{isAcct?}
+      isacct--true-->acct_update_integrals[acct_update_integrals]
+      del_timer_sync--2-->exit_mm[exit_mm]
+      exit_mm--release-->mm_struct(mm_struct)
+      exit_mm--3-->sem_exit[sem_exit]
+      sem_exit--4-->exit_files[exit_files]
+      exit_files--5-->exit_fs[exit_fs]
+      exit_fs--6 exit_code-->task
+      exit_fs--7-->exit_notify[exit_notify]
+      exit_notify-->father
+    end
+  end
+  father--EXIT_ZOMBIE-->task
+```
+
+调用do_exit()之后，进程相关资源被释放、进程不可运行且处于EXIT_ZOMBIE状态。
+* 需等待父进程或者内核发现它并释放剩余内存。
+
+### 删除进程描述符
+
+do_exit()之后，系统仍保存该进程的进程描述符。
+* 因为这样可以让系统有办法在该进程结束后仍能获得它的信息。
+* 当父进程**获得已终结的子进程的信息**或者**通知内核自己并不关注这些信息**之后，子进程的进程描述符才会被释放。
+
+wait()一系列函数都是通过wait4()实现的。
+* 作用是**挂起调用它的进程**，直到**其中一个**子进程退出。
+* 函数返回子进程的PID。
+* 调用该函数传入的指针会包含子进程的退出代码。
+
+release_task()用于释放进程描述符。
+1. 调用_exit_signal()，该函数调用_unhash_process()，后者调用detach_pid()**从pidhash上删除该进程**。
+2. _exit_signal()**释放将死进程的所有剩余资源**，统计并记录。
+3. 如果该进程是线程组的最后一个进程，并且领头进程已经死掉，release_task()将**通知其父进程**。
+4. release_task()调用put_task_struct()**释放进程内核栈和thread_info结构所占的页**以及**task_struct所占的slab高速缓存**。
