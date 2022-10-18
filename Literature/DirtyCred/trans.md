@@ -116,3 +116,117 @@ Linux内核设计内存分配器来管理小内存分配，以此提升性能并
 
 为了解决这个问题，DirtyCred首先使用其中一个保留的指针从中间来释放证书对象。如图3g所示，释放之后，内核创造一个释放过的内存点，其大小和证书对象一样。因此，当DirtyCred分配一个新的证书对象时，内核使用新的证书对象填满该释放过的内存点。正如我们在图3h所观察到的，在释放过的内存点被占用后，最终保留的指针指向新分配的证书对象。这说明功能转换成功，因为DirtyCred能够利用保留的指针非法释放证书对象，从而执行对象交换以提权。
 
+## 五、延长时间窗口
+
+Linux内核在执行文件写操作前需要检查文件权限，DirtyCred需要在权限检查和实际写文件之间执行文件对象交换。然而时间窗口对于成功执行漏洞利用来说太短了，因为交换需要出发漏洞并且执行堆布局操作，这些可能花费几秒钟。为了解决这个问题，DirtyCred利用几个技巧来延长该时间窗口，以保证时间窗口比交换过程所花的时间长。在这里，我们描述这些技巧并讨论它们是如何利用漏洞的。
+
+### Userfaultfd&FUSE的漏洞利用
+
+[Userfaultfd](https://www.kernel.org/doc/html/latest/admin-guide/mm/userfaultfd.html)和[FUSE](https://www.kernel.org/doc/html/latest/filesystems/fuse.html)是两个关键的Linux内核特性。userfaultfd允许用户空间处理页错误。当页错误在userfaultfd注册的内存上发生时，页错误处理程序将被通知去处理页错误。和userfaultfd不同，FUSE是个用户空间文件系统框架，允许用户实现用户空间文件系统。用户可以为实现的用户空间文件系统注册他们的处理程序，以指定如何响应文件操作请求。只要用户想，userfaultfd和FUSE都可以被用来暂停Linux内核的执行。对于userfaultfd来说，对手可以为内存页注册页面错误处理程序。当内核企图访问该内存并触发页面错误时，将调用注册的处理程序，允许对手暂停该内核执行。对于FUSE来说，对手能够从用户空间文件系统分配内存。当内核访问该内存，预设的文件访问处理程序将被调用，从而暂停内核执行。
+
+在这项工作中，DirtyCred利用这些特性在文件权限检查之后来暂停内核执行。接下来，我们把userfaultfd当作<u>描述DiryCred如何实现内核暂停和延长漏洞利用时间窗口的例子</u>。对于FUSE来说，内核暂停的过程是一样的。读者可以参考我们开发的[利用例子](https://hackmd.io/giRE2P2oQHektZzOG053IQ)。
+
+``` c
+/*代码1*/
+struct iovec
+{
+    void __user *iov_base; /* BSD uses caddr_t (1003.1g requires
+void *) */↩→
+    __kernel_size_t iov_len; /* Must be size_t (1003.1g) */
+};
+
+ssize_t vfs_writev(...)
+{
+    // permission checks
+    if (!(file->f_mode & FMODE_WRITE))
+        return -EBADF;
+    if (!(file->f_mode & FMODE_CAN_WRITE))
+        return -EINVAL;
+
+    ...
+    // import iovec to kernel, where kernel would be paused
+    // using userfaultfd & FUSE
+    res = import_iovec(type, uvector, nr_segs,
+        ARRAY_SIZE(iovstack), &iov, &iter);
+    ...
+    // do file writev
+}
+```
+
+在执行文件写入时，DirtyCred调用系统调用writev，实现矢量I/O。与系统调用write不同，此系统调用使用结构体iovec将数据从用户空间传递到内核空间。代码1定义了结构体iovec。正如我们所观察到的，它包含一个用户空间地址和一个大小字段，指示将要传输的数据量。在Linux内核空间中，为了复制包含在iovec中的数据，内核需要首先将iovec导入内核空间。因此，在Linux内核版本v4.13之前，如代码1所示，writev的实现首先检查文件对象，确保当前文件处于打开状态并具有写入权限。检查通过后，它将从用户空间导入iovec，并将用户数据写入相应的文件。在这个实现中，iovec导入过程在权限检查和数据写入之间。DirtyCred可以简单地利用前面提到的userfaultfd特性，在完成权限检查后立即暂停内核执行，从而赢得足够的时间来交换文件对象。据我们所知，Jann Horn首次利用此技术开发[CVE-2016-4557](https://bugs.chromium.org/p/project-zero/issues/detail?id=808)，但在内核v4.13之后不再可用。
+
+### Userfaultfd&FUSE的备选漏洞利用
+
+```c
+\*代码2*\
+//内核v4.13之后的writev实现
+ssize_t vfs_writev(...)
+{
+    ...
+    // import iovec to kernel, where kernel would be paused
+    // using userfaultfd
+    res = import_iovec(type, uvector, nr_segs,
+        ARRAY_SIZE(iovstack), &iov, &iter);
+    ...
+    // permission checks
+    if (!(file->f_mode & FMODE_WRITE))
+        return -EBADF;
+    if (!(file->f_mode & FMODE_CAN_WRITE))
+        return -EINVAL;
+        ...
+    // do file writev
+}
+```
+
+在Linux内核版本v4.13之后，内核实现得到更改。iovec的导入先于权限检查（参见代码2）。在这个新的实现中，DirtyCred仍然可以在导入iovec时使用userfaultfd特性来暂停的内核执行。然而，它不再允许DirtyCred延长权限检查和实际文件写入之间的时间窗口。为了解决这个问题，DirtyCred利用了Linux文件系统的设计。
+
+```c
+/*代码3*/
+ssize_t generic_perform_write(struct file *file,
+    struct iov_iter *i, loff_t pos)
+{
+    /*
+    * Bring in the user page that we will copy from _first_.
+    * Otherwise there's a nasty deadlock on copying from the
+    * same page as we're writing to, without it being marked
+    * up-to-date.
+    */
+    if (unlikely(iov_iter_fault_in_readable(i, bytes))) {
+        status = -EFAULT;
+        break;
+    }
+    ...
+    // call the write operation of the file system
+    status = a_ops->write_begin(file, mapping, pos, bytes, flags, &page, &fsdata);
+    ...
+}
+```
+
+在Linux中，文件系统设计遵循严格的层次结构，其中高层接口是文件写入操作的常见接口，而低层接口因文件系统而异。编写文件时，内核首先调用高层接口。正如代码3所示，最后一行generic_perform_write是文件系统操作的高层接口。我们可以看到，generic_perform_write调用执行文件系统的写入操作，并将数据写入文件。为了保证性能和兼容性，就在写操作之前，内核会为iovec中包含的用户空间数据触发一个页面错误。因此，在第10行中使用userfaultfd特性，DirtyCred可以在实际文件写入之前暂停内核执行，从而为特权文件对象交换获得足够的时间窗口。
+
+与在iovec导入点暂停内核执行相比，我们认为利用文件系统的方案更难缓解。首先，正如Linux代码注释中所描述的那样，移除iovec中的页面错误可能会导致死锁问题（请参阅代码3）。如果页面没有预先出错，某些文件系统将不可避免地遇到问题。第二，虽然在权限检查之前移动页面错误可能会解决问题，但这种直接的防御反应会破坏内核性能，更重要的是会受到潜在的规避。例如，DirtyCred可以在触发第一个页面错误后立即删除页面。这样，内核不可避免地再次触发页面错误，从而在权限检查之后暂停内核执行。
+
+> TODO:为什么移除iovec中的页面错误可能会导致死锁？
+
+### 文件系统锁的漏洞利用
+
+```c
+/*代码4*/
+static ssize_t ext4_buffered_write_iter(struct kiocb *iocb,
+    struct iov_iter *from)
+{
+    ssize_t ret;
+    struct inode *inode = file_inode(iocb->ki_filp);
+    inode_lock(inode);
+    ...
+    ret = generic_perform_write(iocb->ki_filp, from,iocb->ki_pos);
+    ...
+    inode_unlock(inode);
+    return ret;
+}
+```
+
+为了避免弄乱文件的内容，文件系统不允许两个进程同时写入一个文件。在Linux中，它的文件系统通过使用锁机制来实施这种做法。为了说明这一点，代码4显示了在ext4文件系统中执行写操作的简化代码片段。正如我们所观察到的，文件系统首先尝试获取第6行中的inode锁。如果inode在另一个文件的操作下（即其他人持有锁），文件系统将等待直到释放锁。获取锁后，文件系统调用generic_perform_write将数据写入文件。当它完成写入时，文件系统将释放锁并从函数返回。
+
+上面的锁定机制可以确保写入操作不会出错。不幸的是，这给DirtyCred留下了一个机会来延长时间窗口，从而执行对象交换。具体来说，DirtyCred可以生成两个进程（进程A和进程B）来同时在同一文件上写入数据。假设进程A持有锁，写入大量数据。当进程A写入文件时，进程B必须等待很长一段时间，直到第10行中的锁被释放。由于在调用generic_perform_write之前，进程B已经完成了文件权限检查，锁等待所花费的时间为DirtyCred提供了足够大的时间窗口来完成文件对象交换，而无需担心权限检查的阻塞。根据我们的观察，将4GB文件写入硬盘驱动器时，保持时间可能需要几十秒。在这个时间窗口内，触发漏洞和执行内存操作可以完成，而不会在漏洞利用中引发任何不稳定问题。
+
