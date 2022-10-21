@@ -158,7 +158,7 @@ ssize_t vfs_writev(...)
 ### Userfaultfd&FUSE的备选漏洞利用
 
 ```c
-\*代码2*\
+/*代码2*/
 //内核v4.13之后的writev实现
 ssize_t vfs_writev(...)
 {
