@@ -41,7 +41,7 @@
 
 ### Linux内核的证书
 
-证书([credentials](https://www.kernel.org/doc/Documentation/security/credentials.txt))指的是一些能够包含权限信息的内核特性。通过这些特性，Linux内核能够检查用户的访问权限。在Linux内核中，证书作为带有权限信息的内核对象被实现。据我们所知，那些对象包括cred、file和inode。在本文中，我们只使用了cred和file对象来设计了我们的漏洞利用方式。我们排除了inode对象，因为它只有当一个新文件被创建的时候才会被分配，这样无法提供足够的灵活性以操作内存（这是在程序漏洞利用中的关键操作）。我们为了cred、file和inode提供了一些必要的背景如下。
+证书([credentials](https://www.kernel.org/doc/Documentation/security/credentials.txt))指向一些能够包含权限信息的内核特性。通过这些特性，Linux内核能够检查用户的访问权限。在Linux内核中，证书作为带有权限信息的内核对象被实现。据我们所知，那些对象包括cred、file和inode。在本文中，我们只使用了cred和file对象来设计了我们的漏洞利用方式。我们排除了inode对象，因为它只有当一个新文件被创建的时候才会被分配，这样无法提供足够的灵活性以操作内存（这是在程序漏洞利用中的关键操作）。我们为了cred、file和inode提供了一些必要的背景如下。
 
 每个Linux任务都包含一个指向cred对象的指针。该cred对象包含UID域，该域表明了该任务的权限。例如，GLOBAL_ROOT_UID表明该任务有管理员权限。当一个任务试图访问一个资源（例如文件）时，内核会检查该任务的cred对象的UID，从而决定该访问是否能够被授权。除了UID，cred对象还包含功能值(TODO:capability)，该功能指定该任务的细粒度特权。例如，CAP_NET_BIND_SERVICE表明该任务能够绑定套接字到因特网域的特权端口。对于每个任务来说，他们的证书是可配置的。当更改任务证书时，内核将遵循复制并替换(copy-and-replace)的原则。它首先拷贝证书。第二步，它修改拷贝。最后，它改变cred指针，使其指向刚修改的拷贝。在Linux中，每个任务都能更改它自己的证书。
 
