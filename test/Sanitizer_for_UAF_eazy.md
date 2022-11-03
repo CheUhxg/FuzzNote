@@ -19,4 +19,13 @@ long do_sys_open(int dfd, const char __user *filename, int flags, umode_t mode)
 }
 ```
 
-根据上述插入代码，我们只需要在用户空间调用open函数打开`/tmp/null`文件就可以触发UAF漏洞了。
+根据上述插入代码，我们只需要在用户空间调用open函数打开`/tmp/null`文件就可以触发UAF漏洞了,调用函数如下。
+
+```c
+#include<fcntl.h>
+
+int main() {
+    open("/tmp/null", O_RDONLY);
+    return 0;
+}
+```
