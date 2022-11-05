@@ -9,8 +9,9 @@
 ``` c
 long do_sys_open(int dfd, const char __user *filename, int flags, umode_t mode)
 {
-    if(strcmp(filename, "/tmp/null") == 0) {
-        printk("do_sys_open: filename == /tmp/null\n");
+    static int times_null = 0;
+    if(++times_null > 50000) {
+        printk("do_sys_open: UAF\n");
         char *p = (char *)kmalloc(8, GFP_USER);
         kfree(p);
         *p = 'a';
