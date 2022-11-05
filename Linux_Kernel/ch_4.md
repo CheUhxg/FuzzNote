@@ -139,3 +139,13 @@ CFS为*无限小调度周期*设立了一个目标，称作**目标延迟**。
 
 ### 时间记账
 
+时间记账就是对进程的运行时间进行记录。保证进程的时间片减到0时，可以被抢占。
+
+**调度器实体结构**
+* 定义在linux/sched.h的[sched_entity](https://elixir.bootlin.com/linux/latest/source/include/linux/sched.h#L537)中，在task_struct中作为se成员变量。
+* CFS用该结构来进行**记账**。
+
+**虚拟实时**
+* sched_entity的vruntime用于存放虚拟运行时间，这是根据所有可运行进程总数标准化后的值。
+* 由于*处理器并不理想*，所以需要vruntime记录进程到底运行了多长时间。
+* [update_curr()](https://elixir.bootlin.com/linux/latest/source/kernel/sched/fair.c#L885)记录了该记账功能。
