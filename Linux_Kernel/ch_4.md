@@ -141,11 +141,29 @@ CFS为*无限小调度周期*设立了一个目标，称作**目标延迟**。
 
 时间记账就是对进程的运行时间进行记录。保证进程的时间片减到0时，可以被抢占。
 
-**调度器实体结构**
+1. 调度器实体结构
 * 定义在linux/sched.h的[sched_entity](https://elixir.bootlin.com/linux/latest/source/include/linux/sched.h#L537)中，在task_struct中作为se成员变量。
 * CFS用该结构来进行**记账**。
 
-**虚拟实时**
+2. 虚拟实时
 * sched_entity的vruntime用于存放虚拟运行时间，这是根据所有可运行进程总数标准化后的值。
 * 由于*处理器并不理想*，所以需要vruntime记录进程到底运行了多长时间。
 * [update_curr()](https://elixir.bootlin.com/linux/latest/source/kernel/sched/fair.c#L885)记录了该记账功能。
+
+### 进程选择
+
+CFS选择**vruntime值最小**的任务进行调度。
+
+CFS使用**红黑树**来组织可运行进程队列。
+* 有了红黑树，我们就可以通过键值来快速检索节点上的数据（这是因为索引的速度和树的节点规模成**指数比**关系）。
+
+1. 挑选下一个任务
+* 选择红黑树的最左（目前版本是最右）的节点，实现函数是[__pick_next_entity()](https://elixir.bootlin.com/linux/latest/source/kernel/sched/fair.c#L647)。
+  * 如果left为null，CFS调度idle进程。
+
+2. 向树中加入进程
+* 实现函数是[enqueue_entity()](https://elixir.bootlin.com/linux/latest/source/kernel/sched/fair.c#L4411)，该函数先更新运行时间再进行插入。
+
+3. 从树中删除进程
+* 实现函数是[dequeue_entity()](https://elixir.bootlin.com/linux/latest/source/kernel/sched/fair.c#L4512)。
+
