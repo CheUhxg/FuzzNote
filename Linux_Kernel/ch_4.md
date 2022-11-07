@@ -172,3 +172,29 @@ CFS使用**红黑树**来组织可运行进程队列。
 进程调度的入口函数是[schedule()](https://elixir.bootlin.com/linux/latest/source/kernel/sched/core.c#L6563)，它会找到一个最高优先级的*调度类*。
 * 调度类有自己的可运行队列，并会选举出下一个需要调度的程序。
   * 内部调用[pick_next_task()](https://elixir.bootlin.com/linux/latest/source/kernel/sched/core.c#L5867)，其按照优先级**从高到低**的顺序依次检查调度类。
+
+### 睡眠和唤醒
+
+进程睡眠有多种原因，但肯定都是为了等待一些事件。
+* 无论哪种情况，进程都将自己**标记成休眠状态**，从可执行红黑树中移出，放入等待队列。
+* 休眠有两种状态：TASK_INTERRUPTIBLE和UNTASK_INTERRUPTIBLE。
+  * 后者会忽略信号，前者接到信号则会提前唤醒并响应信号。
+  * 这两种状态的进程都在**同一等待队列**上。
+
+1. 等待队列
+* 等待队列是由等待某些事件的进程组成的简单*链表*，内核用[wait_queue_head_t](https://elixir.bootlin.com/linux/latest/source/include/linux/wait.h#L41)来表示。
+* 等待队列可通过DECLARE_WAITQUEUE()静态创建，也可通过[init_waitqueue_head()](https://elixir.bootlin.com/linux/latest/source/include/linux/wait.h#L66)动态创建。
+* 进程将自己加入和移出等待队列的步骤：
+  * 调用DEFINE_WAIT()创建等待队列的项。
+  * 调用add_wait_queue()将自己加入等待队列。同时等待条件满足后的信号。
+  * 调用prepare_to_wait()将进程状态改为TASK_INTERRUPTIBLE或UNTASK_INTERRUPTIBLE。
+  * 如果进程状态为TASK_INTERRUPTIBLE，则信号会唤醒进程。
+  * 进程被唤醒后，它会再次检查等待条件。如果为真，则退出循环；反之，则再次调用schedule()并重复检查。
+  * 退出循环后，进程将状态设置为TASK_RUNNING并调用finish_wait()将自己移出等待队列。
+
+2. 唤醒
+* 唤醒通过[wake_up()](https://elixir.bootlin.com/linux/latest/source/kernel/sched/wait.c#L153)函数完成。
+  * 它调用try_to_wake_up()将状态设置为TASK_RUNNING。
+  * 调用enqueue_task()将进程放入红黑树中。
+  * 若被唤醒的进程的优先级比正在执行的进程优先级高，则需要设置need_resched标志。
+* wake_up()会在<u>等待条件达成的代码</u>之后被调用。
