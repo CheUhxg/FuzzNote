@@ -167,3 +167,8 @@ CFS使用**红黑树**来组织可运行进程队列。
 3. 从树中删除进程
 * 实现函数是[dequeue_entity()](https://elixir.bootlin.com/linux/latest/source/kernel/sched/fair.c#L4512)。
 
+### 调度器入口
+
+进程调度的入口函数是[schedule()](https://elixir.bootlin.com/linux/latest/source/kernel/sched/core.c#L6563)，它会找到一个最高优先级的*调度类*。
+* 调度类有自己的可运行队列，并会选举出下一个需要调度的程序。
+  * 内部调用[pick_next_task()](https://elixir.bootlin.com/linux/latest/source/kernel/sched/core.c#L5867)，其按照优先级**从高到低**的顺序依次检查调度类。
