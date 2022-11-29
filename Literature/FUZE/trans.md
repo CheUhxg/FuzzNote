@@ -47,3 +47,37 @@ UAF漏洞是一种特殊的内存损坏漏洞，它可能会损坏有效数据�
 
 ### 内核UAF漏洞的PoC程序
 
+表1
+```c
+void *task1(void *unused) {
+    ...
+    int err = setsockopt(fd, 0x107, 18, ..., ...);
+}
+
+void *task2(void *unused) {
+    int err = bind(fd, &addr, ...);
+}
+
+void loop_race() {
+    ...
+    while(1) {
+        fd = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
+        //create two racing threads
+        pthread_create (&thread1, NULL, task1, NULL);
+        pthread_create (&thread2, NULL, task2, NULL);
+        pthread_join(thread1, NULL);
+        pthread_join(thread2, NULL);
+        close(fd);
+    }
+}
+```
+
+![](image/figure2.png)
+
+表1显示了一个用C代码编写的PoC程序，能够触发CVE-2017-15649指出的内核UAF漏洞。如第3行所示，setsockopt()是Linux中的一个系统调用。当它在特定类型的套接字上(在第13行中创建)赋值时，它在Linux内核中创建一个新对象，然后将它放在双链表的开头(参见图2a)。
+
+在第16行和第17行，PoC程序创建两个线程，分别调用系统调用setsockopt()和bind()。通过无限循环重复调用这两行代码，PoC创建了一个竞态条件，导致对<u>驻留在新添加对象中的标志</u>的意外操作。
+
+在每次迭代结束时，PoC调用系统调用close()来释放新添加的对象。由于意外的操作，Linux内核无法覆盖头节点中的next指针，从而留下一个指向已释放对象的悬浮指针(参见图2b)。
+
+在悬浮指针出现的连续迭代中，PoC程序调用系统调用并再次创建一个新对象。如图2c所示，在将对象前置到列表中时，系统调用解引用悬浮指针，从而修改位于被释放对象中的prev指针中的数据，导致一个意外的写操作，进一步在连续的内核执行中触发内核恐慌。
