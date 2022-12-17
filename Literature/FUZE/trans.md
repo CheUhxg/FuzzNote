@@ -147,3 +147,57 @@ void loop_race() {
 确定了两个关键位置后，我们的下一步是消除<u>原始PoC中指定的、能够解引用悬浮指针的系统调用</u>的干预。要做到这一点，一种直观的方法是监视内存管理操作，然后拦截内核执行，以便在出现悬浮指针后将执行重定向到内核fuzzing。考虑到内核内部执行的复杂性，这种侵入式的方法并不能保证内核执行的正确性，甚至会使内核出现意外的panic。
 
 为了解决这个技术问题，我们设计了一种替代方法。具体地说，我们将PoC程序包装为一个独立的函数，然后对该函数进行修饰，使其具有触发释放操作的能力，但避免触及悬空指针解引用的位置。通过这种设计，我们可以封装用于内核fuzzing的初始上下文构造，而不会危及内核执行的完整性。
+
+```c
+// Table 1: A PoC code fragment pertaining to the kernel UAF vulnerability (CVE-2017-15649).
+void *task1(void *unused) {
+  ...
+  int err = setsockopt(fd, 0x107, 18, ..., ...);
+}
+
+void *task2(void *unused) {
+  int err = bind(fd, &addr, ...);
+}
+
+void loop_race() {
+  ...
+  while(1) {
+    fd = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
+    ...
+    //create two racing threads
+    pthread_create (&thread1, NULL, task1, NULL);
+    pthread_create (&thread2, NULL, task2, NULL);
+    pthread_join(thread1, NULL);
+    pthread_join(thread2, NULL);
+    close(fd);
+  }
+}
+```
+
+```c
+// Table 2: The wrapping functions preventing dangling pointer dereference.
+// (a) Wrapped PoC program that encloses free and dangling pointer dereference in two separated system calls without race condition involvement.
+PoC_wrapper(){ // PoC wrapping function
+  ...
+  syscallA(...); // free site
+  return; // instrumented statement
+  syscallB(...); // dangling pointer dereference site
+  ...
+}
+
+// (b) Wrapped PoC program that encloses free and dangling pointer dereference in two separated system calls with race condition involvement.
+PoC_wrapper(){ // PoC wrapping function
+  ...
+  while(true){ // Race condition
+    ...
+    threadA(...); // dangling pointer dereference site
+    threadB(...); // free site
+    ...
+    // instrumented statements
+    if (!ioctl(...)) // interact with a kernel module
+        return;
+  }
+}
+```
+
+根据PoC程序中定义的释放操作和悬浮指针解引用的实践，我们设计了不同的策略来实现PoC程序(即包装函数)。如表2a所示，对于一个线程PoC程序，它有一个释放操作，并且在两个分离的系统调用中发生了连续的解引用，我们通过在两个系统调用之间插入一个返回语句来检测PoC程序，因为这可以防止PoC本身进入PoC程序中定义的解引用悬浮指针的站点。对于多线程PoC程序(如表1所示)，悬浮指针可能在内核中的任何迭代中出现。因此，我们对这类PoC程序的插装在迭代结束时插入系统调用ioctl。与定制的内核模块一起，系统调用检查悬浮指针的出现并相应地执行PoC重定向(参见表2b)。
