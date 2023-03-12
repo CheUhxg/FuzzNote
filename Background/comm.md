@@ -190,6 +190,17 @@ struct netlink_sock {
 
 > sk是netlink_sock的**第一个成员(地址相同)**，就可以实现释放指针＆netlink_sock.sk实际上释放了整个netlink_sock对象。
 
+### 引用计数
+
+在Linux内核中，使用refcounter作为引用计数，类型为atomic_t。使用原子操作来修改：
+1. atomic_inc()：减
+2. atomic_add()：加
+3. atomic_dec_and_test()：减一并判断是否为0
+
+一般来说\*_get()用于增加引用，\*_put()用于减少引用。
+
+>仅仅是习惯，比如skb_put()并不会减少引用。
+
 ### cgroup
 
 > cgroup：control group
