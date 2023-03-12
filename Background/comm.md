@@ -87,7 +87,108 @@ if (file->f_op->read)
 
 ### Socket, Sock 和 SKB
 
+在socket创建期间，即调用socket()，将创建一个新的file结构体，并将其文件操作字段设置为socket_file_ops。
 
+```c
+// [net/socket.c]
+
+static const struct file_operations socket_file_ops = {
+    .read = sock_aio_read,      // <---- calls sock->ops->recvmsg()
+    .write =    sock_aio_write, // <---- calls sock->ops->sendmsg()
+    .llseek =   no_llseek,      // <---- returns an error
+  // ...
+}
+```
+
+由于socket实际上实现了socket API(connect()、bind()、accept()、listen()...)，因此它们嵌入了一个类型为struct proto_ops的特殊虚函数表(vft)。每种类型的套接字(例如AF_INET、AF_NETLINK)都实现自己的proto_ops。
+
+```c
+// [include/linux/net.h]
+
+struct proto_ops {
+    int     (*bind)    (struct socket *sock, struct sockaddr *myaddr, int sockaddr_len);
+    int     (*connect) (struct socket *sock, struct sockaddr *vaddr,  int sockaddr_len, int flags);
+    int     (*accept)  (struct socket *sock, struct socket *newsock, int flags);
+  // ...
+}
+```
+
+执行如上系统调用(例如bind())时，内核的处理过程如下：
+1. 从文件描述符表中获得file结构体指针；
+2. 从file结构体中获得socket结构体指针；
+3. 调用专门的proto_ops回调函数(例如sock->ops->bind())。
+
+struct socket具有指向struct sock对象的指针，该指针通常由套接字协议操作(proto_ops)使用。struct socket是连接struct file和struct sock的中间结构体。
+
+```c
+// [include/linux/net.h]
+
+struct socket {
+    struct file     *file;
+    struct sock     *sk;
+    const struct proto_ops  *ops;
+  // ...
+};
+```
+
+struct sock用于以通用方式保持接收/发送缓冲区。当通过网卡接收到数据包时，驱动程序将网络数据包加入到*sock接收缓冲区*中，直到程序决定接收它(recvmsg())。反过来，当程序想要发送数据(sendmsg())时，网络数据包被加入到*sock发送缓冲区*。一有机会，网卡将取出该数据包并发送。
+
+上述网络数据包就是struct sk_buff(SKB)，缓冲区就是由struct sk_buff组成的双向链表。
+
+```c
+// [include/linux/sock.h]
+
+struct sock {
+    int         sk_rcvbuf;    // theorical "max" size of the receive buffer
+    int         sk_sndbuf;    // theorical "max" size of the send buffer
+    atomic_t        sk_rmem_alloc;  // "current" size of the receive buffer
+    atomic_t        sk_wmem_alloc;  // "current" size of the send buffer
+    struct sk_buff_head sk_receive_queue;   // head of doubly-linked list
+    struct sk_buff_head sk_write_queue;     // head of doubly-linked list
+    struct socket       *sk_socket; // socket <-> sock
+  // ...
+}
+```
+
+> struct sock对象通常称为sk，而struct socket对象通常称为sock。
+
+### Netlink Socket
+
+Netlink Socket是socket的一种，该地址族(AF_NETLINK)负责内核和用户之间的通信：
+* 修改路由表(NETLINK_ROUTE)
+* 接收SELinux事件通知(NETLINK_SELINUX)
+* 与其他用户进程通信(NETLINK_USERSOCK)
+
+创建Netlink Socket时，顶层仍使用socket(通用套接字)，使用BSD样式的套接字操作netlink_ops。
+
+```c
+// [net/netlink/af_netlink.c]
+
+static const struct proto_ops netlink_ops = {
+    .bind =     netlink_bind,
+    .accept =   sock_no_accept,     // <--- calling accept() on netlink sockets leads to EOPNOTSUPP error
+    .sendmsg =  netlink_sendmsg,
+    .recvmsg =  netlink_recvmsg,
+  // ...
+}
+```
+
+在使用netlink的情况下，sock对应的是struct netlink_sock(更像sock的子类)。
+
+```c
+// [include/net/netlink_sock.h]
+
+struct netlink_sock {
+    /* struct sock has to be the first member of netlink_sock */
+    struct sock     sk;
+    u32         pid;
+    u32         dst_pid;
+    u32         dst_group;
+  // ...
+};
+```
+
+> sk是netlink_sock的**第一个成员(地址相同)**，就可以实现释放指针＆netlink_sock.sk实际上释放了整个netlink_sock对象。
 
 ### cgroup
 
