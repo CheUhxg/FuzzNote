@@ -1,5 +1,71 @@
 ## 常识
 
+### seccomp
+
+seccomp是一种内核安全机制，允许“程序”限制对系统调用的访问。系统调用可以完全禁止(不可能调用它)，也可以部分禁止(过滤参数)。它是使用称为seccomp过滤器的BPF规则(内核中编译的“程序”)设置的。
+
+如果一个使用seccomp的程序调用了系统调用，内核将会检查thread_info的标志是否包含_TIF_WORK_SYSCALL_ENTRY标志集(TIF_SECCOMP是其中一个)。如果包含的话，则调用syscall_trace_enter()。
+
+```c
+long syscall_trace_enter(struct pt_regs *regs)
+{
+    long ret = 0;
+
+    if (test_thread_flag(TIF_SINGLESTEP))
+        regs->flags |= X86_EFLAGS_TF;
+
+    /* do the secure computing check first */
+    secure_computing(regs->orig_ax);            // <----- "rax" holds the syscall number
+
+  // ...
+}
+
+static inline void secure_computing(int this_syscall)
+{
+    if (unlikely(test_thread_flag(TIF_SECCOMP)))      // <----- check the flag again
+        __secure_computing(this_syscall);
+}
+```
+
+如果系统调用是被禁止的，该进程将会收到一个SIGKILL信号。
+
+### thread_info
+
+thread_info被称作迷你进程描述符，存放在内核线程栈中。
+
+```c
+// [arch/x86/include/asm/thread_info.h]
+
+struct thread_info {
+    struct task_struct    *task;
+    struct exec_domain    *exec_domain;
+    __u32                 flags;
+    __u32                 status;
+    __u32                 cpu;
+    int                   preempt_count;
+    mm_segment_t          addr_limit;
+    struct restart_block  restart_block;
+    void __user           *sysenter_return;
+#ifdef CONFIG_X86_32
+    unsigned long         previous_esp;
+    __u8                  supervisor_stack[0];
+#endif
+    int                   uaccess_err;
+};
+```
+
+其中重要的字段有：
+* task:指向该thread_info的task_struct的指针。
+  * thread_info和task_struct其实是双向绑定，task_struct的stack指针指向thread_info。
+* flags:保留诸如_TIF_NEED_RESCHED或_TIF_SECCOMP的标志。
+* addr_limit:内核角度的“最高”用户域虚拟地址，用于“软件保护机制”。
+
+使用宏get_current()可以得到thread_info对应的task_struct指针。
+
+```c
+#define get_current() (current_thread_info()->task)
+```
+
 ### 进程描述符
 
 每一个线程对应一个进程描述符task_struct，宏current指向当前任务的task_struct。
