@@ -201,6 +201,138 @@ struct netlink_sock {
 
 >仅仅是习惯，比如skb_put()并不会减少引用。
 
+### 运行&等待队列
+
+struct rq(run queue)是调度器最重要的数据结构之一。运行队列中的每个任务都将由CPU执行，每个CPU都有自己的运行队列（允许真正的多任务处理）。运行队列具有一个任务(由调度器选择在指定的CPU上运行)列表。还具有统计信息，使调度器做出“公平”选择并最终重新平衡每个cpu之间的负载（即cpu迁移）。
+
+```c
+// [kernel/sched.c]
+
+struct rq {
+  unsigned long nr_running;   // <----- statistics
+  u64 nr_switches;            // <----- statistics
+  struct task_struct *curr;   // <----- the current running task on the cpu
+  // ...
+};
+```
+
+>deactivate_task()函数将任务从运行队列中移出，任务阻塞。与之相反，activate_task()将任务加入到运行队列中。
+
+任务等待资源或特殊事件非常普遍。例如，如果运行服务器(客户端-服务器（Client/Server）架构里的Server)，主线程可能正在等待即将到来的连接。除非它被标记为“非阻塞”，否则accept()系统调用将阻塞主线程。也就是说，主线程将阻塞在内核中，直到其他东西唤醒它。
+
+等待队列基本上是**由当前阻塞(等待)的任务组成的双链表**。与之相对的是运行队列。队列本身用wait_queue_head_t表示：
+
+```c
+// [include/linux/wait.h]
+
+typedef struct __wait_queue_head wait_queue_head_t;
+
+struct __wait_queue_head {
+    spinlock_t lock;
+    struct list_head task_list;
+};
+```
+
+等待队列的每个元素用wait_queue_t表示。
+
+```c
+// [include/linux.wait.h]
+
+typedef struct __wait_queue wait_queue_t;
+typedef int (*wait_queue_func_t)(wait_queue_t *wait, unsigned mode, int flags, void *key);
+
+struct __wait_queue {
+    unsigned int flags;
+    void *private;                
+    wait_queue_func_t func;     // <----- we will get back to this
+    struct list_head task_list;
+};
+```
+
+生成等待队列元素的宏是DECLARE_WAITQUEUE()。
+
+```c
+// [include/linux/wait.h]
+
+#define __WAITQUEUE_INITIALIZER(name, tsk) {                \
+    .private    = tsk,                      \
+    .func       = default_wake_function,            \
+    .task_list  = { NULL, NULL } }
+
+#define DECLARE_WAITQUEUE(name, tsk)                    \
+    wait_queue_t name = __WAITQUEUE_INITIALIZER(name, tsk) // <----- it creates a variable!
+```
+
+使用add_wait_queue()将生成好的等待队列元素添加到等待队列中。
+
+```c
+// [kernel/wait.c]
+
+void add_wait_queue(wait_queue_head_t *q, wait_queue_t *wait)
+{
+    unsigned long flags;
+
+    wait->flags &= ~WQ_FLAG_EXCLUSIVE;
+    spin_lock_irqsave(&q->lock, flags);
+    __add_wait_queue(q, wait);              // <----- here
+    spin_unlock_irqrestore(&q->lock, flags);
+}
+
+static inline void __add_wait_queue(wait_queue_head_t *head, wait_queue_t *new)
+{
+    list_add(&new->task_list, &head->task_list);
+}
+```
+
+当任务等待的条件满足时，资源所有者通过__wake_up()唤醒等待的线程。
+
+```c
+// [kernel/sched.c]
+
+/**
+ * __wake_up - wake up threads blocked on a waitqueue.
+ * @q: the waitqueue
+ * @mode: which threads
+ * @nr_exclusive: how many wake-one or wake-many threads to wake up
+ * @key: is directly passed to the wakeup function
+ *
+ * It may be assumed that this function implies a write memory barrier before
+ * changing the task state if and only if any tasks are woken up.
+ */
+
+void __wake_up(wait_queue_head_t *q, unsigned int mode,
+            int nr_exclusive, void *key)
+{
+    unsigned long flags;
+
+    spin_lock_irqsave(&q->lock, flags);
+    __wake_up_common(q, mode, nr_exclusive, 0, key);    // <----- here
+    spin_unlock_irqrestore(&q->lock, flags);
+}
+```
+
+```c
+// [kernel/sched.c]
+
+    static void __wake_up_common(wait_queue_head_t *q, unsigned int mode,
+          int nr_exclusive, int wake_flags, void *key)
+    {
+      wait_queue_t *curr, *next;
+
+[0]   list_for_each_entry_safe(curr, next, &q->task_list, task_list) {
+        unsigned flags = curr->flags;
+
+[1]     if (curr->func(curr, mode, wake_flags, key) &&
+            (flags & WQ_FLAG_EXCLUSIVE) && !--nr_exclusive)
+          break;
+      }
+    }
+```
+
+对每个等待队列中的元素执行func回调函数，该函数是在DECLARE_WAITQUEUE宏中指定的default_wake_function。其内部调用try_to_wake_up()，try_to_wake_up()有点像schedule()的“对立面”。**schedule()将当前任务“调度出去”**，**try_to_wake_up()使其再次可调度**。也就是说，它将任务加入运行队列中并更改其状态为"TASK_RUNNING"。
+
+
+
 ### cgroup
 
 > cgroup：control group
