@@ -313,7 +313,7 @@ typedef int (*wait_queue_func_t)(wait_queue_t *wait, unsigned mode, int flags, v
 
 struct __wait_queue {
     unsigned int flags;
-    void *private;          
+    void *private;        
     wait_queue_func_t func;     // <----- we will get back to this
     struct list_head task_list;
 };
@@ -480,9 +480,14 @@ netfilter是用于**数据包处理**的子组件。
 
 * kASLR以2M为最小单位设置基地址，所以通过不断重启查看/proc/kallsyms，可以计算出某个全局变量的偏移量。
 
+### Kernel
+
+* Linux内核v6使用LLVM编译时可以指定llvm工具链版本：LLVM=-18。但是v5只能指定LLVM开启，使用的是不带版本后缀的工具链。
+
 ### QEMU
+
 * 打开--enable-kvm时，gdb调试无法在断点停下。
-* 打开smep/smap：-cpu <cpu-type>/+smep,+smap。
+* 打开smep/smap：-cpu `<cpu-type>`/+smep,+smap。
 
 # 简写
 
