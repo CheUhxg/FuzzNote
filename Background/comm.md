@@ -482,7 +482,19 @@ netfilter是用于**数据包处理**的子组件。
 
 ### Kernel
 
+> Linux内核问题第一时间找GitHub看commit。
+
 * Linux内核v6使用LLVM编译时可以指定llvm工具链版本：LLVM=-18。但是v5只能指定LLVM开启，使用的是不带版本后缀的工具链。
+  * 建议使用可以指定可指定工具链的版本，我成功的[commit参考](https://kernel.googlesource.com/pub/scm/linux/kernel/git/bpf/bpf-next/+/725737e7c21d2d25a4312c2aaa82a52bd03e3126%5E2..725737e7c21d2d25a4312c2aaa82a52bd03e3126/)。
+* 使用LLVM编译v6版本时，报错`error: arch/x86/entry/vdso/vdso.lds`，只需要对arch/x86/entry/vdso/vdso.lds.S做如下修改。
+
+```
+#ifdef CONFIG_X86_SGX
+ 		__vdso_sgx_enter_enclave;
+#endif
+```
+
+* 若内核v6运行时遇到`memcpy: detected field-spanning write (size 32) of single field "&errmsg->msg" at net/netlink/af_netlink.c:2447 (size 16)`，参考[这里](https://github.com/torvalds/linux/commit/710d21fdff9a98d621cd4e64167f3ef8af4e2fd1)。
 
 ### QEMU
 
@@ -511,4 +523,3 @@ netfilter是用于**数据包处理**的子组件。
 | PAE   | Physical Address Extension   | 用于扩展物理地址空间                           |
 | NX    | No-Execute                   | 禁止执行内存中的代码，用于提高系统的安全性     |
 
-希望这份对照表对您有帮助！
