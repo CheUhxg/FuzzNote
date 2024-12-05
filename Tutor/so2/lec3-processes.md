@@ -183,7 +183,7 @@ context_switch(struct rq *rq, struct task_struct *prev,
 ...
 ```
 
-它将调用特定于架构的 switch_to 宏实现来切换寄存器状态和内核堆栈。请注意，寄存器被保存在堆栈上，并且堆栈指针被保存在任务结构体中：
+它将调用**特定于架构**的 switch_to 宏实现来**切换寄存器状态和内核堆栈**。请注意，寄存器被保存在堆栈上，并且堆栈指针被保存在任务结构体中：
 
 ```c
 #define switch_to(prev, next, last)               \
@@ -241,8 +241,19 @@ SYM_CODE_START(__switch_to_asm)
   .popsection
 ```
 
-
+其中RIP没有在该函数中显式保存。
 
 # 阻塞和唤醒
+
+## 任务状态
+
+![images/lec3-task-status.png](images/lec3-task-status.png)
+
+## 阻塞当前线程
+
+1. 将当前线程状态设置为 TASK_UINTERRUPTIBLE 或 TASK_INTERRUPTIBLE；
+2. 将任务添加到等待队列中；
+3. 调用调度程序，从 READY 队列中选择一个新任务；
+4. 进行上下文切换到新任务。
 
 # 进程上下文
